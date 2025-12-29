@@ -18,7 +18,8 @@ class RadioPlayer {
         this.audio = new Audio();
         this.currentUrlIndex = 1; // Empezamos por la directa SSL para mejor compatibilidad inicial
         this.isPlaying = false;
-        
+        this.currentSong = null;
+
         // DOM Elements
         this.playBtn = document.getElementById('play-pause-btn');
         this.playIcon = document.getElementById('play-icon');
@@ -37,7 +38,7 @@ class RadioPlayer {
         this.setupAudio();
         this.setupListeners();
         this.startMetadataPolling();
-        
+
         // Initial volume
         this.audio.volume = this.volumeSlider.value;
     }
@@ -67,7 +68,7 @@ class RadioPlayer {
 
     setupListeners() {
         this.playBtn.addEventListener('click', () => this.togglePlay());
-        
+
         this.volumeSlider.addEventListener('input', (e) => {
             this.audio.volume = e.target.value;
         });
@@ -108,39 +109,71 @@ class RadioPlayer {
 
     handlePlaybackError() {
         this.updateStatus('Reconectando...', 'error');
-        
+
         // Fallback logic
         this.currentUrlIndex = (this.currentUrlIndex + 1) % CONFIG.urls.length;
         console.log(`Switching to URL: ${CONFIG.urls[this.currentUrlIndex]}`);
-        
+
         setTimeout(() => {
             this.audio.src = CONFIG.urls[this.currentUrlIndex];
             if (this.isPlaying) {
-                this.audio.play().catch(() => {});
+                this.audio.play().catch(() => { });
             }
         }, CONFIG.retryDelay);
     }
 
     async fetchMetadata() {
         try {
-            // Usamos la URL que suele reportar metadatos (puerto 7022)
-            // Nota: En un entorno real, esto podría requerir un proxy si el servidor de radio no tiene CORS habilitado
             const response = await fetch(CONFIG.urls[0] + '/stats?json=1', { mode: 'cors' });
             if (response.ok) {
                 const data = await response.json();
-                this.updateUIWithMetadata(data);
+                await this.updateUIWithMetadata(data);
             }
         } catch (error) {
-            // Silent error for metadata
-            console.debug('Metadata fetch failed, possibly CORS or host down');
+            console.debug('Metadata fetch failed:', error);
         }
     }
 
-    updateUIWithMetadata(data) {
+    async updateUIWithMetadata(data) {
         if (data && data.songtitle) {
-            const parts = data.songtitle.split(' - ');
-            this.trackTitle.textContent = parts[1] || parts[0];
-            this.artistName.textContent = parts[0] || 'Radio Stream';
+            const songTitle = data.songtitle;
+            const parts = songTitle.split(' - ');
+            const artist = parts[0] || 'Radio Stream';
+            const track = parts[1] || '';
+
+            // Solo buscar nueva portada si la canción cambió
+            if (this.currentSong !== songTitle) {
+                this.currentSong = songTitle;
+                this.trackTitle.textContent = track || artist;
+                this.artistName.textContent = track ? artist : 'En vivo';
+
+                // Buscar portada en iTunes
+                await this.fetchCoverArt(artist, track);
+            }
+        } else {
+            this.trackTitle.textContent = "Streaming en vivo";
+            this.artistName.textContent = "Radio Online";
+        }
+    }
+
+    async fetchCoverArt(artist, track) {
+        const query = `${artist} ${track}`.trim();
+        const defaultCover = "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?auto=format&fit=crop&w=400&q=80";
+        const coverImg = document.getElementById('cover-image');
+
+        try {
+            const response = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&limit=1`);
+            const data = await response.json();
+
+            if (data.results && data.results.length > 0) {
+                const artworkUrl = data.results[0].artworkUrl100.replace('100x100', '600x600');
+                coverImg.src = artworkUrl;
+            } else {
+                coverImg.src = defaultCover;
+            }
+        } catch (error) {
+            console.error('Error fetching cover art:', error);
+            coverImg.src = defaultCover;
         }
     }
 
